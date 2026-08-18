@@ -100,3 +100,11 @@ The script creates the `reconciliation_results` view from `reconciliation.sql` a
 | `currency_mismatch` | Invoice and payment currencies differ. |
 
 With the default 1,000-row data, the report contains 970 matched rows and 10 rows in each anomaly status. The full outer join produces 1,010 reconciliation rows because missing invoices and missing payments appear separately.
+
+To export the non-matching records for review, pass an output path:
+
+```bash
+python reconcile.py --output data/reconciliation_exceptions.csv
+```
+
+The export contains one row per exception with its status, identifiers, dates, amounts, currencies, payment method, and amount difference. With the default data it contains 40 rows. The generated exception report is ignored by Git because it is an operational output that can be recreated from PostgreSQL.
