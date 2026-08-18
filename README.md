@@ -10,13 +10,20 @@ Run the script from the repository root:
 python generate_data.py
 ```
 
-This creates `data/invoices.csv` and `data/payments.csv`, each with 1,000 rows. The default random seed is fixed, so repeated runs produce the same data. You can optionally change the row count, seed, or output directory:
+This creates `data/invoices.csv` and `data/payments.csv`, each with 1,000 rows. The default random seed is fixed, so repeated runs produce the same data. You can optionally change the row count, seed, anomaly count, or output directory:
 
 ```bash
-python generate_data.py --count 1000 --seed 42 --output-dir data
+python generate_data.py --count 1000 --seed 42 --anomalies-per-type 10 --output-dir data
 ```
 
-Each generated invoice has one payment with the same invoice ID, amount, and currency. Payment dates range from the invoice date through 45 days afterward.
+By default, the files contain 10 examples of each reconciliation anomaly:
+
+- Missing payment: an invoice has no payment with the same `invoice_id`.
+- Missing invoice: a payment references an `INV-ORPHAN-*` identifier.
+- Amount mismatch: the payment is half the invoice amount.
+- Currency mismatch: the invoice is in USD and the payment is in EUR.
+
+All other records match. The missing-payment records are replaced by the same number of orphan payments, keeping both CSV files at 1,000 rows. Pass `--anomalies-per-type 0` to produce entirely matching data. Payment dates range from the invoice date through 45 days afterward.
 
 ## CSV schemas
 
@@ -36,7 +43,7 @@ Each generated invoice has one payment with the same invoice ID, amount, and cur
 | Column | Description | Example |
 | --- | --- | --- |
 | `payment_id` | Unique payment identifier | `PAY-000001` |
-| `invoice_id` | Identifier of the invoice being paid | `INV-000001` |
+| `invoice_id` | Identifier of the invoice being paid | `INV-ORPHAN-000001` |
 | `payment_date` | Payment date in ISO 8601 format | `2025-12-11` |
 | `amount` | Payment amount in decimal currency units | `593.69` |
 | `currency` | ISO 4217 currency code | `USD` |
@@ -73,3 +80,23 @@ The loader performs these steps in one database transaction:
 4. Prints source and database row counts and amount totals for verification.
 
 The PostgreSQL schema uses `DATE` for dates, `NUMERIC(12, 2)` for amounts, and text columns for identifiers and labels. The raw tables deliberately do not add a foreign key between payments and invoices, allowing future reconciliation work to detect unmatched records instead of rejecting them during ingestion.
+
+## Run the reconciliation report
+
+After generating and loading the data, run:
+
+```bash
+python reconcile.py
+```
+
+The script creates the `reconciliation_results` view from `reconciliation.sql` and prints row counts, invoice totals, payment totals, and differences for these mutually exclusive statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `matched` | Invoice ID, amount, and currency agree. |
+| `missing_payment` | An invoice has no payment with the same invoice ID. |
+| `missing_invoice` | A payment has no invoice with the same invoice ID. |
+| `amount_mismatch` | Invoice and payment amounts differ. |
+| `currency_mismatch` | Invoice and payment currencies differ. |
+
+With the default 1,000-row data, the report contains 970 matched rows and 10 rows in each anomaly status. The full outer join produces 1,010 reconciliation rows because missing invoices and missing payments appear separately.
