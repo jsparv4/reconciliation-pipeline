@@ -36,6 +36,14 @@ def write_exceptions(path: Path, rows: list[tuple[object, ...]]) -> None:
         writer.writerows(rows)
 
 
+def create_reconciliation_view(connection: psycopg.Connection) -> None:
+    """Create or replace the reconciliation view using the project SQL."""
+    reconciliation_sql = (PROJECT_DIR / "reconciliation.sql").read_text(encoding="utf-8")
+    with connection.cursor() as cursor:
+        # reconciliation.sql is a trusted project file, not user-provided SQL.
+        cursor.execute(cast(LiteralString, reconciliation_sql))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -45,12 +53,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    reconciliation_sql = (PROJECT_DIR / "reconciliation.sql").read_text(encoding="utf-8")
-
     with psycopg.connect(**database_connection_parameters()) as connection:
+        create_reconciliation_view(connection)
         with connection.cursor() as cursor:
-            # reconciliation.sql is a trusted project file, not user-provided SQL.
-            cursor.execute(cast(LiteralString, reconciliation_sql))
             cursor.execute(
                 """
                 SELECT

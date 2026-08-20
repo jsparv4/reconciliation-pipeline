@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -31,6 +32,20 @@ PAYMENT_FIELDS = (
 )
 InvoiceRow: TypeAlias = tuple[str, str, date, date, Decimal, str]
 PaymentRow: TypeAlias = tuple[str, str, date, Decimal, str, str]
+
+
+@dataclass(frozen=True)
+class ControlTotals:
+    source_rows: int
+    database_rows: int
+    source_amount: Decimal
+    database_amount: Decimal
+
+
+@dataclass(frozen=True)
+class LoadVerification:
+    invoices: ControlTotals
+    payments: ControlTotals
 
 
 def read_invoices(path: Path) -> tuple[list[InvoiceRow], Decimal]:
@@ -75,6 +90,65 @@ def read_payments(path: Path) -> tuple[list[PaymentRow], Decimal]:
     return rows, sum((row[3] for row in rows), start=Decimal("0"))
 
 
+def ingest_files(
+    connection: psycopg.Connection,
+    invoices_path: Path,
+    payments_path: Path,
+) -> LoadVerification:
+    """Replace the raw tables with CSV data and return control totals."""
+    invoices, source_invoice_total = read_invoices(invoices_path)
+    payments, source_payment_total = read_payments(payments_path)
+    schema_sql = (PROJECT_DIR / "schema.sql").read_text(encoding="utf-8")
+
+    with connection.cursor() as cursor:
+        # schema.sql is a trusted project file, not user-provided SQL.
+        cursor.execute(cast(LiteralString, schema_sql))
+        cursor.execute("TRUNCATE TABLE raw_payments, raw_invoices")
+
+        cursor.executemany(
+            """
+            INSERT INTO raw_invoices
+                (invoice_id, customer_id, invoice_date, due_date, amount, currency)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            invoices,
+        )
+        cursor.executemany(
+            """
+            INSERT INTO raw_payments
+                (payment_id, invoice_id, payment_date, amount, currency, payment_method)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            payments,
+        )
+
+        cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM raw_invoices")
+        invoice_result = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM raw_payments")
+        payment_result = cursor.fetchone()
+
+        if invoice_result is None or payment_result is None:
+            raise RuntimeError("Database verification queries returned no result")
+
+        database_invoice_count, database_invoice_total = invoice_result
+        database_payment_count, database_payment_total = payment_result
+
+    return LoadVerification(
+        invoices=ControlTotals(
+            source_rows=len(invoices),
+            database_rows=database_invoice_count,
+            source_amount=source_invoice_total,
+            database_amount=database_invoice_total,
+        ),
+        payments=ControlTotals(
+            source_rows=len(payments),
+            database_rows=database_payment_count,
+            source_amount=source_payment_total,
+            database_amount=database_payment_total,
+        ),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -91,53 +165,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    invoices, source_invoice_total = read_invoices(args.invoices)
-    payments, source_payment_total = read_payments(args.payments)
-    schema_sql = (PROJECT_DIR / "schema.sql").read_text(encoding="utf-8")
-
     with psycopg.connect(**database_connection_parameters()) as connection:
-        with connection.cursor() as cursor:
-            # schema.sql is a trusted project file, not user-provided SQL.
-            cursor.execute(cast(LiteralString, schema_sql))
-            cursor.execute("TRUNCATE TABLE raw_payments, raw_invoices")
-
-            cursor.executemany(
-                """
-                INSERT INTO raw_invoices
-                    (invoice_id, customer_id, invoice_date, due_date, amount, currency)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                invoices,
-            )
-            cursor.executemany(
-                """
-                INSERT INTO raw_payments
-                    (payment_id, invoice_id, payment_date, amount, currency, payment_method)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                payments,
-            )
-
-            cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM raw_invoices")
-            invoice_result = cursor.fetchone()
-            cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM raw_payments")
-            payment_result = cursor.fetchone()
-
-            if invoice_result is None or payment_result is None:
-                raise RuntimeError("Database verification queries returned no result")
-
-            database_invoice_count, database_invoice_total = invoice_result
-            database_payment_count, database_payment_total = payment_result
+        verification = ingest_files(connection, args.invoices, args.payments)
 
     print("Load verification")
     print("dataset   source rows  database rows  source total  database total")
     print(
-        f"invoices  {len(invoices):>11}  {database_invoice_count:>13}  "
-        f"{source_invoice_total:>12.2f}  {database_invoice_total:>14.2f}"
+        f"invoices  {verification.invoices.source_rows:>11}  "
+        f"{verification.invoices.database_rows:>13}  "
+        f"{verification.invoices.source_amount:>12.2f}  "
+        f"{verification.invoices.database_amount:>14.2f}"
     )
     print(
-        f"payments  {len(payments):>11}  {database_payment_count:>13}  "
-        f"{source_payment_total:>12.2f}  {database_payment_total:>14.2f}"
+        f"payments  {verification.payments.source_rows:>11}  "
+        f"{verification.payments.database_rows:>13}  "
+        f"{verification.payments.source_amount:>12.2f}  "
+        f"{verification.payments.database_amount:>14.2f}"
     )
 
 

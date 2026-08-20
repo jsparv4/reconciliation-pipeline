@@ -45,6 +45,19 @@ Compose reads `.env` when it creates PostgreSQL, and the Python scripts read the
 
 To stop PostgreSQL while retaining its data, run `docker compose down`. To also delete the database volume and start fresh next time, run `docker compose down --volumes`.
 
+## Running tests
+
+The pytest suite uses the PostgreSQL service from Docker Compose. It creates a unique temporary database schema for each database test and removes it afterward, leaving the normal pipeline tables unchanged.
+
+With `.env` configured as described above, run:
+
+```bash
+docker compose up -d --wait
+python -m pytest
+```
+
+The tests cover deterministic data generation, every reconciliation status, ingestion control totals, repeatable ingestion, and invalid input handling.
+
 ## Generate the data
 
 Run the script from the repository root:
