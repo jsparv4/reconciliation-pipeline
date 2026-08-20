@@ -2,10 +2,12 @@
 
 import argparse
 import csv
+import io
 from pathlib import Path
-from typing import LiteralString, cast
+from typing import LiteralString, Mapping, Sequence, cast
 
 import psycopg
+from psycopg.rows import dict_row
 
 from database import database_connection_parameters
 
@@ -44,6 +46,53 @@ def create_reconciliation_view(connection: psycopg.Connection) -> None:
         cursor.execute(cast(LiteralString, reconciliation_sql))
 
 
+def fetch_reconciliation_results(
+    connection: psycopg.Connection,
+) -> list[dict[str, object]]:
+    """Return every database-classified reconciliation row."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                reconciliation_status,
+                invoice_id,
+                payment_id,
+                customer_id,
+                invoice_date,
+                due_date,
+                payment_date,
+                invoice_amount,
+                payment_amount,
+                invoice_currency,
+                payment_currency,
+                payment_method,
+                COALESCE(payment_amount, 0)
+                    - COALESCE(invoice_amount, 0) AS amount_difference
+            FROM reconciliation_results
+            ORDER BY
+                CASE reconciliation_status
+                    WHEN 'matched' THEN 1
+                    WHEN 'missing_payment' THEN 2
+                    WHEN 'missing_invoice' THEN 3
+                    WHEN 'amount_mismatch' THEN 4
+                    WHEN 'currency_mismatch' THEN 5
+                END,
+                invoice_id,
+                payment_id
+            """
+        )
+        return cursor.fetchall()
+
+
+def reconciliation_rows_to_csv(rows: Sequence[Mapping[str, object]]) -> str:
+    """Serialize reconciliation rows using the standard exception columns."""
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=EXCEPTION_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -80,37 +129,12 @@ def main() -> None:
 
             exception_rows: list[tuple[object, ...]] = []
             if args.output:
-                cursor.execute(
-                    """
-                    SELECT
-                        reconciliation_status,
-                        invoice_id,
-                        payment_id,
-                        customer_id,
-                        invoice_date,
-                        due_date,
-                        payment_date,
-                        invoice_amount,
-                        payment_amount,
-                        invoice_currency,
-                        payment_currency,
-                        payment_method,
-                        COALESCE(payment_amount, 0)
-                            - COALESCE(invoice_amount, 0) AS amount_difference
-                    FROM reconciliation_results
-                    WHERE reconciliation_status <> 'matched'
-                    ORDER BY
-                        CASE reconciliation_status
-                            WHEN 'missing_payment' THEN 1
-                            WHEN 'missing_invoice' THEN 2
-                            WHEN 'amount_mismatch' THEN 3
-                            WHEN 'currency_mismatch' THEN 4
-                        END,
-                        invoice_id,
-                        payment_id
-                    """
-                )
-                exception_rows = cursor.fetchall()
+                reconciliation_rows = fetch_reconciliation_results(connection)
+                exception_rows = [
+                    tuple(row[field] for field in EXCEPTION_FIELDS)
+                    for row in reconciliation_rows
+                    if row["reconciliation_status"] != "matched"
+                ]
 
     print("Reconciliation summary")
     print("status               rows   invoice total   payment total      difference")

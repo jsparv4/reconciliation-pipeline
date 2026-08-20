@@ -45,6 +45,18 @@ Compose reads `.env` when it creates PostgreSQL, and the Python scripts read the
 
 To stop PostgreSQL while retaining its data, run `docker compose down`. To also delete the database volume and start fresh next time, run `docker compose down --volumes`.
 
+## Run the Web App
+
+With `.env` configured as described above, start PostgreSQL, install the project dependencies, and launch Streamlit from the repository root:
+
+```bash
+docker compose up -d --wait
+python -m pip install -r requirements.txt
+streamlit run app.py
+```
+
+Open the local URL printed by Streamlit. Upload the invoices CSV, upload the payments CSV, select **Run Reconciliation**, inspect the full results and exceptions, and use **Download exceptions as CSV** to save the exception report.
+
 ## Running tests
 
 The pytest suite uses the PostgreSQL service from Docker Compose. It creates a unique temporary database schema for each database test and removes it afterward, leaving the normal pipeline tables unchanged.

@@ -10,7 +10,11 @@ from generate_data import (
     write_csv,
 )
 from ingest_postgres import INVOICE_FIELDS, PAYMENT_FIELDS, ingest_files
-from reconcile import create_reconciliation_view
+from reconcile import (
+    create_reconciliation_view,
+    fetch_reconciliation_results,
+    reconciliation_rows_to_csv,
+)
 
 
 def write_dataset(directory, invoices, payments):
@@ -22,11 +26,10 @@ def write_dataset(directory, invoices, payments):
 
 
 def reconciliation_statuses(connection):
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT invoice_id, reconciliation_status FROM reconciliation_results"
-        )
-        return dict(cursor.fetchall())
+    return {
+        row["invoice_id"]: row["reconciliation_status"]
+        for row in fetch_reconciliation_results(connection)
+    }
 
 
 def test_default_dataset_has_expected_reconciliation_counts(
@@ -80,6 +83,24 @@ def test_each_reconciliation_business_rule(tmp_path, database_connection):
         "INV-CURRENCY": "currency_mismatch",
         "INV-ORPHAN": "missing_invoice",
     }
+
+
+def test_reconciliation_results_can_be_exported_as_csv(
+    tmp_path,
+    database_connection,
+):
+    invoices = [invoice("INV-MATCH", "100.00")]
+    payments = [payment("PAY-MATCH", "INV-MATCH", "100.00")]
+    invoices_path, payments_path = write_dataset(tmp_path, invoices, payments)
+    ingest_files(database_connection, invoices_path, payments_path)
+    create_reconciliation_view(database_connection)
+
+    csv_text = reconciliation_rows_to_csv(
+        fetch_reconciliation_results(database_connection)
+    )
+
+    assert csv_text.startswith("reconciliation_status,invoice_id,payment_id")
+    assert "matched,INV-MATCH,PAY-MATCH" in csv_text
 
 
 def invoice(invoice_id, amount, currency="USD"):
