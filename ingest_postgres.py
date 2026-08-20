@@ -2,13 +2,14 @@
 
 import argparse
 import csv
-import os
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import LiteralString, TypeAlias, cast
 
 import psycopg
+
+from database import database_connection_parameters
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -77,11 +78,6 @@ def read_payments(path: Path) -> tuple[list[PaymentRow], Decimal]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--database-url",
-        default=os.environ.get("DATABASE_URL"),
-        help="PostgreSQL connection URL (defaults to DATABASE_URL)",
-    )
-    parser.add_argument(
         "--invoices",
         type=Path,
         default=PROJECT_DIR / "data" / "invoices.csv",
@@ -95,14 +91,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.database_url:
-        parser.error("set DATABASE_URL or pass --database-url")
-
     invoices, source_invoice_total = read_invoices(args.invoices)
     payments, source_payment_total = read_payments(args.payments)
     schema_sql = (PROJECT_DIR / "schema.sql").read_text(encoding="utf-8")
 
-    with psycopg.connect(args.database_url) as connection:
+    with psycopg.connect(**database_connection_parameters()) as connection:
         with connection.cursor() as cursor:
             # schema.sql is a trusted project file, not user-provided SQL.
             cursor.execute(cast(LiteralString, schema_sql))

@@ -2,11 +2,12 @@
 
 import argparse
 import csv
-import os
 from pathlib import Path
 from typing import LiteralString, cast
 
 import psycopg
+
+from database import database_connection_parameters
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -38,23 +39,15 @@ def write_exceptions(path: Path, rows: list[tuple[object, ...]]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--database-url",
-        default=os.environ.get("DATABASE_URL"),
-        help="PostgreSQL connection URL (defaults to DATABASE_URL)",
-    )
-    parser.add_argument(
         "--output",
         type=Path,
         help="optional path for a CSV containing non-matching records",
     )
     args = parser.parse_args()
 
-    if not args.database_url:
-        parser.error("set DATABASE_URL or pass --database-url")
-
     reconciliation_sql = (PROJECT_DIR / "reconciliation.sql").read_text(encoding="utf-8")
 
-    with psycopg.connect(args.database_url) as connection:
+    with psycopg.connect(**database_connection_parameters()) as connection:
         with connection.cursor() as cursor:
             # reconciliation.sql is a trusted project file, not user-provided SQL.
             cursor.execute(cast(LiteralString, reconciliation_sql))

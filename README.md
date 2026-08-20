@@ -1,6 +1,49 @@
 # Reconciliation Pipeline
 
-This repository contains a simple Python script that generates synthetic invoice and payment data for reconciliation experiments. It uses only the Python standard library.
+This repository contains a simple Python pipeline that generates synthetic invoice and payment data, loads it into PostgreSQL, and reports reconciliation results.
+
+## Start the pipeline
+
+The prerequisites are Python 3.10 or newer and Docker with Docker Compose. From the repository root, create a local environment file from the checked-in example.
+
+PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Bash:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and replace `change-me` with a local database password. Then install the Python dependencies and start PostgreSQL:
+
+```bash
+python -m pip install -r requirements.txt
+docker compose up -d --wait
+```
+
+Generate the source files, load them, and run the reconciliation report:
+
+```bash
+python generate_data.py
+python ingest_postgres.py
+python reconcile.py --output data/reconciliation_exceptions.csv
+```
+
+Compose reads `.env` when it creates PostgreSQL, and the Python scripts read the same file when connecting. Existing process environment variables take precedence over values in `.env`. The required settings are:
+
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `POSTGRES_DB` | Database name | `reconciliation` |
+| `POSTGRES_USER` | Database user | `reconciliation` |
+| `POSTGRES_PASSWORD` | Database password | `change-me` |
+| `POSTGRES_HOST` | Host used by the Python scripts | `localhost` |
+| `POSTGRES_PORT` | Host port published by Compose | `5432` |
+
+To stop PostgreSQL while retaining its data, run `docker compose down`. To also delete the database volume and start fresh next time, run `docker compose down --volumes`.
 
 ## Generate the data
 
@@ -53,23 +96,10 @@ The `invoice_id` column is the reconciliation key between the two files.
 
 ## Load the CSVs into PostgreSQL
 
-The PostgreSQL tables are defined explicitly in `schema.sql` and match the CSV columns. Install the one required database driver:
+The PostgreSQL tables are defined explicitly in `schema.sql` and match the CSV columns. With PostgreSQL running and the five `POSTGRES_*` variables configured in `.env`, run:
 
 ```bash
-python -m pip install -r requirements.txt
-```
-
-Set a PostgreSQL connection URL and run the loader. In PowerShell:
-
-```powershell
-$env:DATABASE_URL = "postgresql://postgres:password@localhost:5432/reconciliation"
 python ingest_postgres.py
-```
-
-Or pass the connection URL directly:
-
-```bash
-python ingest_postgres.py --database-url postgresql://postgres:password@localhost:5432/reconciliation
 ```
 
 The loader performs these steps in one database transaction:
